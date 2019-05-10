@@ -29,5 +29,9 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- If true, the AOT snapshots are grouped by abi. -->
+        <meta-data
+            android:name="io.flutter.view.FlutterMain.aot-abi-split"
+            android:value="${aotAbiSplit}" />
     </application>
 </manifest>
