@@ -87,13 +87,6 @@ class FlutterPlugin implements Plugin<Project> {
         return 'android-arm-all';
     }
 
-    private Boolean getBuildShareLibrary(Project project) {
-        if (project.hasProperty('build-shared-library')) {
-            return project.property('build-shared-library').toBoolean()
-        }
-        return false;
-    }
-
     private String resolveProperty(Project project, String name, String defaultValue) {
         if (localProperties == null) {
             localProperties = readPropertiesIfExist(new File(project.projectDir.parentFile, "local.properties"))
@@ -395,7 +388,6 @@ class FlutterPlugin implements Plugin<Project> {
             extraGenSnapshotOptionsValue = project.property('extra-gen-snapshot-options')
         }
 
-        Boolean buildSharedLibraryValue = this.getBuildShareLibrary(project)
         String targetPlatformValue = this.getTargetPlatform(project)
 
         def addFlutterDeps = { variant ->
@@ -444,7 +436,6 @@ class FlutterPlugin implements Plugin<Project> {
                     createPatch createPatchValue
                     buildNumber buildNumberValue
                     baselineDir baselineDirValue
-                    buildSharedLibrary buildSharedLibraryValue
                     targetPlatform currentTargetPlatformValue
                     sourceDir project.file(project.flutter.source)
                     intermediateDir project.file("${project.buildDir}/${AndroidProject.FD_INTERMEDIATES}/flutter/${variant.name}/${currentTargetPlatformValue}")
@@ -467,13 +458,10 @@ class FlutterPlugin implements Plugin<Project> {
                 }
 
                 dependsOn flutterTasks
-                // Add the snapshots and rename them as `lib/{abi}/*.so`.
-                flutterTasks.each { flutterTask -> 
+                // Add the ELF shared library.
+                flutterTasks.each { flutterTask ->
                     from(flutterTask.intermediateDir) {
-                        include 'vm_snapshot_data'
-                        include 'vm_snapshot_instr'
-                        include 'isolate_snapshot_data'
-                        include 'isolate_snapshot_instr'
+                        include 'app.so'
                         rename {  String filename ->
                             return "lib/${flutterTask.abi}/lib_${filename}.so"
                         }
@@ -481,8 +469,8 @@ class FlutterPlugin implements Plugin<Project> {
                 }
             }
 
-            // Include the snapshots and libflutter.so in `lib/`.
-            if (flutterBuildMode == 'release' && targetPlatformValue == 'android-arm-all') {
+            // Include the ELF shared library and libflutter.so in `lib/`.
+            if (flutterBuildMode == 'release') {
                 project.dependencies {
                     String configuration;
                     if (project.getConfigurations().findByName("api")) {
@@ -510,10 +498,10 @@ class FlutterPlugin implements Plugin<Project> {
                     variant.mergeAssets.mustRunAfter("clean${variant.mergeAssets.name.capitalize()}")
                     into variant.mergeAssets.outputDir
                 }
-                flutterTasks.each { flutterTask -> 
+                flutterTasks.each { flutterTask ->
                     with flutterTask.assets
                     // Include the snapshots in the assets directory.
-                    if (flutterBuildMode != 'release' || targetPlatformValue != 'android-arm-all') {
+                    if (flutterBuildMode != 'release') {
                         with flutterTask.snapshots
                     }
                 }
@@ -576,8 +564,6 @@ abstract class BaseFlutterTask extends DefaultTask {
     @Optional @Input
     String baselineDir
     @Optional @Input
-    Boolean buildSharedLibrary
-    @Optional @Input
     String targetPlatform
     @Input
     String abi
@@ -624,6 +610,7 @@ abstract class BaseFlutterTask extends DefaultTask {
                 args "--quiet"
                 args "--target", targetPath
                 args "--output-dir", "${intermediateDir}"
+                args "--build-shared-library"
                 if (trackWidgetCreation) {
                     args "--track-widget-creation"
                 }
@@ -632,9 +619,6 @@ abstract class BaseFlutterTask extends DefaultTask {
                 }
                 if (extraGenSnapshotOptions != null) {
                     args "--extra-gen-snapshot-options", "${extraGenSnapshotOptions}"
-                }
-                if (buildSharedLibrary) {
-                    args "--build-shared-library"
                 }
                 if (targetPlatform == null) {
                     args "--target-platform", "android-arm"
@@ -731,14 +715,7 @@ class FlutterTask extends BaseFlutterTask {
             from "${intermediateDir}"
 
             if (buildMode == 'release' || buildMode == 'profile') {
-                if (buildSharedLibrary) {
-                    include "app.so"
-                } else {
-                    include "vm_snapshot_data"
-                    include "vm_snapshot_instr"
-                    include "isolate_snapshot_data"
-                    include "isolate_snapshot_instr"
-                }
+                include "app.so"
             }
         }
     }
