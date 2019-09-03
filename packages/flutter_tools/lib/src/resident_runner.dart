@@ -27,6 +27,18 @@ import 'run_cold.dart';
 import 'run_hot.dart';
 import 'vmservice.dart';
 
+class Pair<L, R> {
+  Pair(this.left, this.right) :
+    assert(left != null),
+    assert(right != null);
+
+  /// Left value.
+  final L left;
+
+  /// Right value.
+  final R right;
+}
+
 class FlutterDevice {
   FlutterDevice(
     this.device, {
@@ -92,15 +104,16 @@ class FlutterDevice {
 
   final Device device;
   final ResidentCompiler generator;
-  List<Uri> observatoryUris;
+  final String viewFilter;
+  final bool trackWidgetCreation;
+
   List<VMService> vmServices;
+  Stream<Uri> observatoryUris;
   DevFS devFS;
   ApplicationPackage package;
   List<String> fileSystemRoots;
   String fileSystemScheme;
   StreamSubscription<String> _loggingSubscription;
-  final String viewFilter;
-  final bool trackWidgetCreation;
 
   /// If the [reloadSources] parameter is not null the 'reloadSources' service
   /// will be registered.
@@ -111,25 +124,31 @@ class FlutterDevice {
   /// expressions requested during debugging of the application.
   /// This ensures that the reload process follows the normal orchestration of
   /// the Flutter Tools and not just the VM internal service.
-  Future<void> connect({
+  Stream<VMService> connect({
     ReloadSources reloadSources,
     Restart restart,
     CompileExpression compileExpression,
-  }) async {
-    if (vmServices != null)
-      return;
-    final List<VMService> localVmServices = List<VMService>(observatoryUris.length);
-    for (int i = 0; i < observatoryUris.length; i += 1) {
-      printTrace('Connecting to service protocol: ${observatoryUris[i]}');
-      localVmServices[i] = await VMService.connect(
-        observatoryUris[i],
-        reloadSources: reloadSources,
-        restart: restart,
-        compileExpression: compileExpression,
-      );
-      printTrace('Successfully connected to service protocol: ${observatoryUris[i]}');
+  }) async* {
+    assert(observatoryUris != null);
+
+    printStatus('Waiting for a connection from Flutter on ${device.name}...');
+    await for (Uri observatoryUri in observatoryUris) {
+      printTrace('Trying to connect to service protocol: $observatoryUri');
+      try {
+        final VMService vmService = await VMService.connect(
+          observatoryUri,
+          reloadSources: reloadSources,
+          restart: restart,
+          compileExpression: compileExpression,
+        );
+        printStatus('Done.');
+        printTrace('Successfully connected to service protocol: $observatoryUri');
+        vmServices = <VMService>[vmService];
+        yield vmService;
+      } catch (e) {
+        printTrace('Fail to connect to service protocol: $observatoryUri, $e');
+      }
     }
-    vmServices = localVmServices;
   }
 
   Future<void> refreshViews() async {
@@ -393,9 +412,9 @@ class FlutterDevice {
       return 2;
     }
     if (result.hasObservatory) {
-      observatoryUris = <Uri>[result.observatoryUri];
+      observatoryUris = Stream<Uri>.value(result.observatoryUri);
     } else {
-      observatoryUris = <Uri>[];
+      observatoryUris = const Stream<Uri>.empty();
     }
     return 0;
   }
@@ -451,9 +470,9 @@ class FlutterDevice {
       return 2;
     }
     if (result.hasObservatory) {
-      observatoryUris = <Uri>[result.observatoryUri];
+      observatoryUris = Stream<Uri>.value(result.observatoryUri);
     } else {
-      observatoryUris = <Uri>[];
+      observatoryUris = const Stream<Uri>.empty();
     }
     return 0;
   }
@@ -562,7 +581,7 @@ abstract class ResidentRunner {
   final DebuggingOptions debuggingOptions;
   final bool stayResident;
   final bool ipv6;
-  final Completer<int> _finished = Completer<int>();
+  Completer<int> _finished;
   final String dillOutputPath;
   final String packagesFilePath;
   final String projectRootPath;
@@ -570,7 +589,7 @@ abstract class ResidentRunner {
   final AssetBundle assetBundle;
 
   bool _exited = false;
-  bool hotMode ;
+  bool hotMode;
   String getReloadPath({ bool fullRestart }) => mainPath + (fullRestart ? '' : '.incremental') + '.dill';
 
   bool get isRunningDebug => debuggingOptions.buildInfo.isDebug;
@@ -616,6 +635,8 @@ abstract class ResidentRunner {
   Future<int> attach({
     Completer<DebugConnectionInfo> connectionInfoCompleter,
     Completer<void> appStartedCompleter,
+    Future<void> Function() onAppStarted,
+    Future<void> Function() onAppExited,
   });
 
   bool get supportsRestart => false;
@@ -625,6 +646,8 @@ abstract class ResidentRunner {
         isRunningRelease ? 'release' : 'this';
     throw '${fullRestart ? 'Restart' : 'Reload'} is not supported in $mode mode';
   }
+
+  bool get exited => _exited;
 
   Future<void> exit() async {
     _exited = true;
@@ -773,36 +796,29 @@ abstract class ResidentRunner {
   // Failures should be indicated by completing the future with an error, using
   // a string as the error object, which will be used by the caller (attach())
   // to display an error message.
-  Future<void> connectToServiceProtocol({
+  Stream<Pair<FlutterDevice, VMService>> connectToServiceProtocol({
     ReloadSources reloadSources,
     Restart restart,
     CompileExpression compileExpression,
-  }) async {
+  }) async* {
     if (!debuggingOptions.debuggingEnabled)
       throw 'The service protocol is not enabled.';
 
-    bool viewFound = false;
     for (FlutterDevice device in flutterDevices) {
-      await device.connect(
+      final Stream<VMService> vmServices = device.connect(
         reloadSources: reloadSources,
         restart: restart,
         compileExpression: compileExpression,
       );
-      await device.getVMs();
-      await device.refreshViews();
-      if (device.views.isNotEmpty)
-        viewFound = true;
-    }
-    if (!viewFound) {
-      if (flutterDevices.length == 1)
-        throw 'No Flutter view is available on ${flutterDevices.first.device.name}.';
-      throw 'No Flutter view is available on any device '
-            '(${flutterDevices.map<String>((FlutterDevice device) => device.device.name).join(', ')}).';
-    }
-
-    // Listen for service protocol connection to close.
-    for (FlutterDevice device in flutterDevices) {
-      for (VMService service in device.vmServices) {
+      await for (VMService service in vmServices) {
+        await service.getVM();
+        await service.vm.refreshViews(waitForViews: true);
+        if (device.views.isEmpty) {
+          printStatus('No flutter view available on ${flutterDevices.first.device.name}');
+          continue;
+        }
+        _finished = Completer<int>();
+        // Listen for service protocol connection to close.
         // This hooks up callbacks for when the connection stops in the future.
         // We don't want to wait for them. We don't handle errors in those callbacks'
         // futures either because they just print to logger and is not critical.
@@ -810,6 +826,7 @@ abstract class ResidentRunner {
           _serviceProtocolDone,
           onError: _serviceProtocolError,
         ).whenComplete(_serviceDisconnected));
+        yield Pair<FlutterDevice, VMService>(device, service);
       }
     }
   }
@@ -829,13 +846,15 @@ abstract class ResidentRunner {
       // User requested the application exit.
       return;
     }
+    assert(_finished != null);
     if (_finished.isCompleted)
       return;
     printStatus('Lost connection to device.');
-    _finished.complete(0);
+   _finished.complete(0);
   }
 
   void appFinished() {
+    assert(_finished != null);
     if (_finished.isCompleted)
       return;
     printStatus('Application finished.');
@@ -843,6 +862,7 @@ abstract class ResidentRunner {
   }
 
   Future<int> waitForAppToFinish() async {
+    assert(_finished != null);
     final int exitCode = await _finished.future;
     assert(exitCode != null);
     await cleanupAtFinish();
@@ -957,11 +977,11 @@ class TerminalHandler {
   void registerSignalHandlers() {
     assert(residentRunner.stayResident);
     io.ProcessSignal.SIGINT.watch().listen((io.ProcessSignal signal) {
-      _cleanUp(signal);
+      cleanUp();
       io.exit(0);
     });
     io.ProcessSignal.SIGTERM.watch().listen((io.ProcessSignal signal) {
-      _cleanUp(signal);
+      cleanUp();
       io.exit(0);
     });
     if (!residentRunner.supportsServiceProtocol || !residentRunner.supportsRestart)
@@ -1116,7 +1136,7 @@ class TerminalHandler {
       if (error is! ToolExit) {
         printError('$error\n$st');
       }
-      await _cleanUp(null);
+      await cleanUp();
       rethrow;
     } finally {
       _processingUserRequest = false;
@@ -1139,7 +1159,8 @@ class TerminalHandler {
     }
   }
 
-  Future<void> _cleanUp(io.ProcessSignal signal) async {
+  /// Stops listening to keystrokes entered to the terminal and removes signal handlers.
+  Future<void> cleanUp() async {
     terminal.singleCharMode = false;
     await subscription?.cancel();
     await residentRunner.cleanupAfterSignal();

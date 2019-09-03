@@ -108,7 +108,7 @@ class MacOSDevice extends Device {
     _deviceLogReader.initializeProcess(process);
     final ProtocolDiscovery observatoryDiscovery = ProtocolDiscovery.observatory(_deviceLogReader);
     try {
-      final Uri observatoryUri = await observatoryDiscovery.uri;
+      final Uri observatoryUri = await observatoryDiscovery.uris.first;
       // Bring app to foreground.
       await processManager.run(<String>[
         'open', package.applicationBundle(debuggingOptions?.buildInfo?.mode),
@@ -117,8 +117,6 @@ class MacOSDevice extends Device {
     } catch (error) {
       printError('Error waiting for a debug connection: $error');
       return LaunchResult.failed();
-    } finally {
-      await observatoryDiscovery.cancel();
     }
   }
 

@@ -17,9 +17,7 @@ class ProtocolDiscovery {
     this.portForwarder,
     this.hostPort,
     this.ipv6,
-  }) : assert(logReader != null) {
-    _deviceLogSubscription = logReader.logLines.listen(_handleLine);
-  }
+  }) : assert(logReader != null);
 
   factory ProtocolDiscovery.observatory(
     DeviceLogReader logReader, {
@@ -43,40 +41,30 @@ class ProtocolDiscovery {
   final int hostPort;
   final bool ipv6;
 
-  final Completer<Uri> _completer = Completer<Uri>();
-
-  StreamSubscription<String> _deviceLogSubscription;
-
-  /// The discovered service URI.
-  Future<Uri> get uri => _completer.future;
-
-  Future<void> cancel() => _stopScrapingLogs();
-
-  Future<void> _stopScrapingLogs() async {
-    await _deviceLogSubscription?.cancel();
-    _deviceLogSubscription = null;
-  }
-
-  void _handleLine(String line) {
-    Uri uri;
-    final RegExp r = RegExp('${RegExp.escape(serviceName)} listening on ((http|\/\/)[a-zA-Z0-9:/=_\\-\.\\[\\]]+)');
-    final Match match = r.firstMatch(line);
-
-    if (match != null) {
+  /// The stream with the discovered service URIs.
+  ///
+  /// The service may not be active on a given URI since the service can disconnect
+  /// at any time and re-issue a new URI.
+  ///
+  /// Therefore, if the connection to the service is lost, clients can try to re-connect
+  /// to a new URI.
+  Stream<Uri> get uris async* {
+    final RegExp serviceUriRegEx = RegExp('${RegExp.escape(serviceName)} listening on '
+        '((http|\/\/)[a-zA-Z0-9:/=_\\-\.\\[\\]]+)');
+    await for (String line in logReader.logLines) {
+      final Match match = serviceUriRegEx.firstMatch(line);
+      if (match == null) {
+        continue;
+      }
+      Uri uri;
       try {
         uri = Uri.parse(match[1]);
-      } catch (error, stackTrace) {
-        _stopScrapingLogs();
-        _completer.completeError(error, stackTrace);
+      } catch (error) {
+        printError('Failed to parse URI in line: $line');
+        continue;
       }
+      yield await _forwardPort(uri);
     }
-
-    if (uri != null) {
-      assert(!_completer.isCompleted);
-      _stopScrapingLogs();
-      _completer.complete(_forwardPort(uri));
-    }
-
   }
 
   Future<Uri> _forwardPort(Uri deviceUri) async {
@@ -89,12 +77,10 @@ class ProtocolDiscovery {
       printTrace('Forwarded host port $actualHostPort to device port $actualDevicePort for $serviceName');
       hostUri = deviceUri.replace(port: actualHostPort);
     }
-
     assert(InternetAddress(hostUri.host).isLoopback);
     if (ipv6) {
       hostUri = hostUri.replace(host: InternetAddress.loopbackIPv6.host);
     }
-
     return hostUri;
   }
 }

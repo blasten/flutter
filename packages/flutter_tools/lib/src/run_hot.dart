@@ -144,92 +144,90 @@ class HotRunner extends ResidentRunner {
   Future<int> attach({
     Completer<DebugConnectionInfo> connectionInfoCompleter,
     Completer<void> appStartedCompleter,
+    Future<void> Function() onAppStarted,
+    Future<void> Function() onAppExited,
   }) async {
     _didAttach = true;
-    try {
-      await connectToServiceProtocol(
-        reloadSources: _reloadSourcesService,
-        restart: _restartService,
-        compileExpression: _compileExpressionService,
-      );
-    } catch (error) {
-      printError('Error connecting to the service protocol: $error');
-      // https://github.com/flutter/flutter/issues/33050
-      // TODO(blasten): Remove this check once https://issuetracker.google.com/issues/132325318 has been fixed.
-      if (await hasDeviceRunningAndroidQ(flutterDevices) &&
-          error.toString().contains(kAndroidQHttpConnectionClosedExp)) {
-        printStatus('🔨 If you are using an emulator running Android Q Beta, consider using an emulator running API level 29 or lower.');
-        printStatus('Learn more about the status of this issue on https://issuetracker.google.com/issues/132325318.');
-      }
-      return 2;
-    }
 
-    for (FlutterDevice device in flutterDevices)
-      device.initLogReader();
-    try {
-      final List<Uri> baseUris = await _initDevFS();
-      if (connectionInfoCompleter != null) {
-        // Only handle one debugger connection.
-        connectionInfoCompleter.complete(
-          DebugConnectionInfo(
-            httpUri: flutterDevices.first.observatoryUris.first,
-            wsUri: flutterDevices.first.vmServices.first.wsAddress,
-            baseUri: baseUris.first.toString(),
-          )
-        );
-      }
-    } catch (error) {
-      printError('Error initializing DevFS: $error');
-      return 3;
-    }
-    final Stopwatch initialUpdateDevFSsTimer = Stopwatch()..start();
-    final UpdateFSReport devfsResult = await _updateDevFS(fullRestart: true);
-    _addBenchmarkData(
-      'hotReloadInitialDevFSSyncMilliseconds',
-      initialUpdateDevFSsTimer.elapsed.inMilliseconds,
+    final String fsName = fs.path.basename(projectRootPath);
+    final Stream<Pair<FlutterDevice, VMService>> connections = connectToServiceProtocol(
+      reloadSources: _reloadSourcesService,
+      restart: _restartService,
+      compileExpression: _compileExpressionService,
     );
-    if (!devfsResult.success)
-      return 3;
-
-    await refreshViews();
-    for (FlutterDevice device in flutterDevices) {
+    await for(Pair<FlutterDevice, VMService> connection in connections) {
+      final FlutterDevice flutterDevice = connection.left;
+      final VMService service = connection.right;
+      flutterDevice.initLogReader();
+      Uri uri;
+      try {
+        uri = await flutterDevice.setupDevFS(
+          fsName,
+          fs.directory(projectRootPath),
+          packagesFilePath: packagesFilePath,
+        );
+      } catch (error) {
+        printError('Error initializing DevFS: $error');
+        return 3;
+      }
+      // Only handle one debugger connection.
+      connectionInfoCompleter?.complete(
+        DebugConnectionInfo(
+          httpUri: service.httpAddress,
+          wsUri: service.wsAddress,
+          baseUri: uri.toString(),
+        )
+      );
+      final Stopwatch initialUpdateDevFSsTimer = Stopwatch()..start();
+      final UpdateFSReport devfsResult = await _updateDevFS(fullRestart: true);
+      _addBenchmarkData(
+        'hotReloadInitialDevFSSyncMilliseconds',
+        initialUpdateDevFSsTimer.elapsed.inMilliseconds,
+      );
+      if (!devfsResult.success) {
+        return 3;
+      }
+      await refreshViews();
       // VM must have accepted the kernel binary, there will be no reload
       // report, so we let incremental compiler know that source code was accepted.
-      if (device.generator != null)
-        device.generator.accept();
-      for (FlutterView view in device.views)
+      flutterDevice.generator?.accept();
+
+      for (FlutterView view in flutterDevice.views) {
         printTrace('Connected to $view.');
-    }
-
-    appStartedCompleter?.complete();
-
-    if (benchmarkMode) {
-      // We are running in benchmark mode.
-      printStatus('Running in benchmark mode.');
-      // Measure time to perform a hot restart.
-      printStatus('Benchmarking hot restart');
-      await restart(fullRestart: true, benchmarkMode: true);
-      printStatus('Benchmarking hot reload');
-      // Measure time to perform a hot reload.
-      await restart(fullRestart: false);
-      if (stayResident) {
-        await waitForAppToFinish();
-      } else {
-        printStatus('Benchmark completed. Exiting application.');
-        await _cleanupDevFS();
-        await stopEchoingDeviceLog();
-        await exitApp();
       }
-      final File benchmarkOutput = fs.file('hot_benchmark.json');
-      benchmarkOutput.writeAsStringSync(toPrettyJson(benchmarkData));
-      return 0;
-    }
+      // Notify this connection.
+      appStartedCompleter?.complete();
 
-    int result = 0;
-    if (stayResident)
-      result = await waitForAppToFinish();
-    await cleanupAtFinish();
-    return result;
+      if (benchmarkMode) {
+        // We are running in benchmark mode.
+        printStatus('Running in benchmark mode.');
+        // Measure time to perform a hot restart.
+        printStatus('Benchmarking hot restart');
+        await restart(fullRestart: true, benchmarkMode: true);
+        printStatus('Benchmarking hot reload');
+        // Measure time to perform a hot reload.
+        await restart(fullRestart: false);
+        if (stayResident) {
+          await waitForAppToFinish();
+        } else {
+          printStatus('Benchmark completed. Exiting application.');
+          await _cleanupDevFS();
+          await stopEchoingDeviceLog();
+          await exitApp();
+        }
+        final File benchmarkOutput = fs.file('hot_benchmark.json');
+        benchmarkOutput.writeAsStringSync(toPrettyJson(benchmarkData));
+        return 0;
+      }
+      int exitCode = 0;
+
+      if (stayResident) {
+        exitCode = await waitForAppToFinish();
+      }
+      await cleanupAtFinish();
+      return exitCode;
+    }
+    return 0;
   }
 
   @override
@@ -262,20 +260,6 @@ class HotRunner extends ResidentRunner {
       connectionInfoCompleter: connectionInfoCompleter,
       appStartedCompleter: appStartedCompleter,
     );
-  }
-
-  Future<List<Uri>> _initDevFS() async {
-    final String fsName = fs.path.basename(projectRootPath);
-    final List<Uri> devFSUris = <Uri>[];
-    for (FlutterDevice device in flutterDevices) {
-      final Uri uri = await device.setupDevFS(
-        fsName,
-        fs.directory(projectRootPath),
-        packagesFilePath: packagesFilePath,
-      );
-      devFSUris.add(uri);
-    }
-    return devFSUris;
   }
 
   Future<UpdateFSReport> _updateDevFS({ bool fullRestart = false }) async {
@@ -964,8 +948,10 @@ class HotRunner extends ResidentRunner {
     printStatus(message);
     for (FlutterDevice device in flutterDevices) {
       final String dname = device.device.name;
-      for (Uri uri in device.observatoryUris)
-        printStatus('An Observatory debugger and profiler on $dname is available at: $uri');
+      for (VMService vmService in device.vmServices) {
+        printStatus('An Observatory debugger and profiler on $dname is available at: '
+            '${vmService.httpAddress}');
+      }
     }
     final String quitMessage = _didAttach
         ? 'To detach, press "d"; to quit, press "q".'

@@ -183,7 +183,7 @@ class FlutterTesterDevice extends Device {
         hostPort: debuggingOptions.observatoryPort,
       );
 
-      final Uri observatoryUri = await observatoryDiscovery.uri;
+      final Uri observatoryUri = await observatoryDiscovery.uris.first;
       return LaunchResult.succeeded(observatoryUri: observatoryUri);
     } catch (error) {
       printError('Failed to launch $package: $error');

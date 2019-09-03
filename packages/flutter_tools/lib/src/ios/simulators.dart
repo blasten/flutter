@@ -395,13 +395,11 @@ class IOSSimulator extends Device {
     printTrace('Waiting for observatory port to be available...');
 
     try {
-      final Uri deviceUri = await observatoryDiscovery.uri;
+      final Uri deviceUri = await observatoryDiscovery.uris.first;
       return LaunchResult.succeeded(observatoryUri: deviceUri);
     } catch (error) {
       printError('Error waiting for a debug connection: $error');
       return LaunchResult.failed();
-    } finally {
-      await observatoryDiscovery.cancel();
     }
   }
 

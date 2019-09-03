@@ -183,6 +183,8 @@ class ResidentWebRunner extends ResidentRunner {
   Future<int> attach({
     Completer<DebugConnectionInfo> connectionInfoCompleter,
     Completer<void> appStartedCompleter,
+    Future<void> Function() onAppStarted,
+    Future<void> Function() onAppExited,
   }) async {
     // Cleanup old subscriptions. These will throw if there isn't anything
     // listening, which is fine because that is what we want to ensure.

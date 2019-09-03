@@ -384,13 +384,11 @@ class IOSDevice extends Device {
 
       try {
         printTrace('Application launched on the device. Waiting for observatory port.');
-        final Uri localUri = await observatoryDiscovery.uri;
+        final Uri localUri = await observatoryDiscovery.uris.first;
         return LaunchResult.succeeded(observatoryUri: localUri);
       } catch (error) {
         printError('Failed to establish a debug connection with $id: $error');
         return LaunchResult.failed();
-      } finally {
-        await observatoryDiscovery?.cancel();
       }
     } finally {
       installStatus.stop();

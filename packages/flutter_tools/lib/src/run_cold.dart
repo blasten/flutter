@@ -71,7 +71,7 @@ class ColdRunner extends ResidentRunner {
     // Connect to observatory.
     if (debuggingOptions.debuggingEnabled) {
       try {
-        await connectToServiceProtocol();
+        await connectToServiceProtocol().first;
       } on String catch (message) {
         printError(message);
         return 2;
@@ -81,7 +81,7 @@ class ColdRunner extends ResidentRunner {
     if (flutterDevices.first.observatoryUris != null) {
       // For now, only support one debugger connection.
       connectionInfoCompleter?.complete(DebugConnectionInfo(
-        httpUri: flutterDevices.first.observatoryUris.first,
+        httpUri: await flutterDevices.first.observatoryUris.first,
         wsUri: flutterDevices.first.vmServices.first.wsAddress,
       ));
     }
@@ -121,10 +121,12 @@ class ColdRunner extends ResidentRunner {
   Future<int> attach({
     Completer<DebugConnectionInfo> connectionInfoCompleter,
     Completer<void> appStartedCompleter,
+    Future<void> Function() onAppStarted,
+    Future<void> Function() onAppExited,
   }) async {
     _didAttach = true;
     try {
-      await connectToServiceProtocol();
+      await connectToServiceProtocol().first;
     } catch (error) {
       printError('Error connecting to the service protocol: $error');
       // https://github.com/flutter/flutter/issues/33050
@@ -173,9 +175,10 @@ class ColdRunner extends ResidentRunner {
     bool haveAnything = false;
     for (FlutterDevice device in flutterDevices) {
       final String dname = device.device.name;
-      if (device.observatoryUris != null) {
-        for (Uri uri in device.observatoryUris) {
-          printStatus('An Observatory debugger and profiler on $dname is available at $uri');
+      if (device.vmServices != null) {
+       for (VMService vmService in device.vmServices) {
+          printStatus('An Observatory debugger and profiler on $dname is available at '
+              '${vmService.httpAddress}');
           haveAnything = true;
         }
       }
