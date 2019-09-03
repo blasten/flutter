@@ -92,7 +92,7 @@ class FlutterDevice {
 
   final Device device;
   final ResidentCompiler generator;
-  List<Uri> observatoryUris;
+  Stream<Uri> observatoryUris;
   List<VMService> vmServices;
   DevFS devFS;
   ApplicationPackage package;
@@ -116,20 +116,26 @@ class FlutterDevice {
     Restart restart,
     CompileExpression compileExpression,
   }) async {
-    if (vmServices != null)
+    if (vmServices != null) {
       return;
-    final List<VMService> localVmServices = List<VMService>(observatoryUris.length);
-    for (int i = 0; i < observatoryUris.length; i += 1) {
-      printTrace('Connecting to service protocol: ${observatoryUris[i]}');
-      localVmServices[i] = await VMService.connect(
-        observatoryUris[i],
-        reloadSources: reloadSources,
-        restart: restart,
-        compileExpression: compileExpression,
-      );
-      printTrace('Successfully connected to service protocol: ${observatoryUris[i]}');
     }
-    vmServices = localVmServices;
+    await for (Uri observatoryUri in observatoryUris) {
+      printTrace('Connecting to service protocol: $observatoryUri');
+      vmServices = <VMService>[];
+      try {
+        final VMService localVmService = await VMService.connect(
+          observatoryUri,
+          reloadSources: reloadSources,
+          restart: restart,
+          compileExpression: compileExpression,
+        );
+        vmServices.add(localVmService);
+        printTrace('Successfully connected to service protocol: $observatoryUri');
+        return;
+      } catch(error) {
+        printTrace('Fail to connect to service protocol: $error');
+      }
+    }
   }
 
   Future<void> refreshViews() async {
@@ -393,9 +399,9 @@ class FlutterDevice {
       return 2;
     }
     if (result.hasObservatory) {
-      observatoryUris = <Uri>[result.observatoryUri];
+      observatoryUris = Stream<Uri>.value(result.observatoryUri);
     } else {
-      observatoryUris = <Uri>[];
+      observatoryUris =  const Stream<Uri>.empty();
     }
     return 0;
   }
@@ -451,9 +457,9 @@ class FlutterDevice {
       return 2;
     }
     if (result.hasObservatory) {
-      observatoryUris = <Uri>[result.observatoryUri];
+      observatoryUris = Stream<Uri>.value(result.observatoryUri);
     } else {
-      observatoryUris = <Uri>[];
+      observatoryUris = const Stream<Uri>.empty();
     }
     return 0;
   }
@@ -783,11 +789,13 @@ abstract class ResidentRunner {
 
     bool viewFound = false;
     for (FlutterDevice device in flutterDevices) {
+      printStatus('trying to connect');
       await device.connect(
         reloadSources: reloadSources,
         restart: restart,
         compileExpression: compileExpression,
       );
+      printStatus('connected');
       await device.getVMs();
       await device.refreshViews();
       if (device.views.isNotEmpty)

@@ -4,8 +4,10 @@
 
 import 'dart:async';
 
+import 'package:flutter_tools/src/android/android_emulator.dart';
 import 'package:multicast_dns/multicast_dns.dart';
 
+import '../android/android_device.dart';
 import '../artifacts.dart';
 import '../base/common.dart';
 import '../base/context.dart';
@@ -198,7 +200,7 @@ class AttachCommand extends FlutterCommand {
             notifyingLogger: NotifyingLogger(), logToStdout: true)
       : null;
 
-    Uri observatoryUri;
+    Stream<Uri> observatoryUris;
     bool usesIpv6 = ipv6;
     final String ipv6Loopback = InternetAddress.loopbackIPv6.address;
     final String ipv4Loopback = InternetAddress.loopbackIPv4.address;
@@ -215,7 +217,7 @@ class AttachCommand extends FlutterCommand {
         FuchsiaIsolateDiscoveryProtocol isolateDiscoveryProtocol;
         try {
           isolateDiscoveryProtocol = device.getIsolateDiscoveryProtocol(module);
-          observatoryUri = await isolateDiscoveryProtocol.uri;
+          observatoryUris = Stream<Uri>.fromFuture(isolateDiscoveryProtocol.uri);
           printStatus('Done.'); // FYI, this message is used as a sentinel in tests.
         } catch (_) {
           isolateDiscoveryProtocol?.dispose();
@@ -228,31 +230,38 @@ class AttachCommand extends FlutterCommand {
       } else if ((device is IOSDevice) || (device is IOSSimulator)) {
         final MDnsObservatoryDiscoveryResult result = await MDnsObservatoryDiscovery().query(applicationId: appId);
         if (result != null) {
-          observatoryUri = await _buildObservatoryUri(device, hostname, result.port, result.authCode);
+          observatoryUris = Stream<Uri>.fromFuture(_buildObservatoryUri(device, hostname, result.port, result.authCode));
         }
       }
       // If MDNS discovery fails or we're not on iOS, fallback to ProtocolDiscovery.
-      if (observatoryUri == null) {
+      if (observatoryUris == null) {
         ProtocolDiscovery observatoryDiscovery;
+        DeviceLogReader deviceLogReader;
+        if ((device is AndroidDevice) || (device is AndroidEmulator)) {
+          deviceLogReader = TagNameFilteredLogReader(
+            device: device,
+            tagName: 'flutter',
+          );
+        } else {
+          deviceLogReader = device.getLogReader();
+        }
         try {
           observatoryDiscovery = ProtocolDiscovery.observatory(
-            device.getLogReader(),
+            deviceLogReader,
             portForwarder: device.portForwarder,
           );
           printStatus('Waiting for a connection from Flutter on ${device.name}...');
-          observatoryUri = await observatoryDiscovery.uri;
+          observatoryUris = observatoryDiscovery.uris;
           // Determine ipv6 status from the scanned logs.
           usesIpv6 = observatoryDiscovery.ipv6;
           printStatus('Done.'); // FYI, this message is used as a sentinel in tests.
         } catch (error) {
           throwToolExit('Failed to establish a debug connection with ${device.name}: $error');
-        } finally {
-          await observatoryDiscovery?.cancel();
         }
       }
     } else {
-      observatoryUri = await _buildObservatoryUri(device,
-          debugUri?.host ?? hostname, devicePort ?? debugUri.port, debugUri?.path);
+      observatoryUris =  Stream<Uri>.fromFuture(_buildObservatoryUri(device,
+          debugUri?.host ?? hostname, devicePort ?? debugUri.port, debugUri?.path));
     }
     try {
       final bool useHot = getBuildInfo().isDebug;
@@ -267,7 +276,7 @@ class AttachCommand extends FlutterCommand {
         targetModel: TargetModel(argResults['target-model']),
         buildMode: getBuildMode(),
       );
-      flutterDevice.observatoryUris = <Uri>[ observatoryUri ];
+      flutterDevice.observatoryUris = observatoryUris;
       final List<FlutterDevice> flutterDevices =  <FlutterDevice>[flutterDevice];
       final DebuggingOptions debuggingOptions = DebuggingOptions.enabled(getBuildInfo());
       terminal.usesTerminalUi = daemon == null;

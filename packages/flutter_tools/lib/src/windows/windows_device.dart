@@ -97,13 +97,11 @@ class WindowsDevice extends Device {
     _logReader.initializeProcess(process);
     final ProtocolDiscovery observatoryDiscovery = ProtocolDiscovery.observatory(_logReader);
     try {
-      final Uri observatoryUri = await observatoryDiscovery.uri;
+      final Uri observatoryUri = await observatoryDiscovery.uris.first;
       return LaunchResult.succeeded(observatoryUri: observatoryUri);
     } catch (error) {
       printError('Error waiting for a debug connection: $error');
       return LaunchResult.failed();
-    } finally {
-      await observatoryDiscovery.cancel();
     }
   }
 

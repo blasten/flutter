@@ -580,17 +580,15 @@ class AndroidDevice extends Device {
     // TODO(danrubel): Waiting for observatory services can be made common across all devices.
     try {
       Uri observatoryUri;
-
       if (debuggingOptions.buildInfo.isDebug || debuggingOptions.buildInfo.isProfile) {
-        observatoryUri = await observatoryDiscovery.uri;
+        // Since we are reading the most recent logs, just return this first service URI.
+        assert(getLogReader() is _AdbLogReader);
+        observatoryUri = await observatoryDiscovery.uris.first;
       }
-
       return LaunchResult.succeeded(observatoryUri: observatoryUri);
     } catch (error) {
       printError('Error waiting for a debug connection: $error');
       return LaunchResult.failed();
-    } finally {
-      await observatoryDiscovery.cancel();
     }
   }
 
@@ -782,7 +780,67 @@ void parseADBDeviceOutput(
   }
 }
 
-/// A log reader that logs from `adb logcat`.
+/// A log reader that filters the logs by tag name from `adb logcat`.
+class TagNameFilteredLogReader extends DeviceLogReader {
+  TagNameFilteredLogReader({
+    @required this.device,
+    @required this.tagName,
+  }) :
+  assert(device != null),
+  assert(tagName != null)
+  {
+    _linesController = StreamController<String>.broadcast(
+      onListen: _start,
+      onCancel: _stop,
+    );
+  }
+  /// The Android device.
+  final AndroidDevice device;
+
+  /// The tag name to filter the logs by.
+  final String tagName;
+
+  Process _adbProcess;
+
+  StreamController<String> _linesController;
+
+  @override
+  Stream<String> get logLines => _linesController.stream;
+
+  @override
+  String get name => device.name;
+
+  void _start() {
+    final List<String> args = <String>['shell', '-x', 'logcat', '-v', 'brief', '-s', tagName];
+    runCommand(device.adbCommandForDevice(args)).then<void>((Process process) {
+      _adbProcess = process;
+      const Utf8Decoder decoder = Utf8Decoder(reportErrors: false);
+      _adbProcess.stdout.transform<String>(decoder)
+          .transform<String>(const LineSplitter()).listen(_onLine);
+      _adbProcess.exitCode.whenComplete(() {
+        if (_linesController.hasListener) {
+          _linesController.close();
+        }
+      });
+    });
+  }
+
+  void _stop() {
+    _adbProcess?.kill();
+  }
+
+  void _onLine(String line) {
+    // Expected line format: <priority>/<tag> ( <pid>): message
+    final int colon = line.indexOf(':');
+    if (colon == -1) {
+      return;
+    }
+    // Send the message.
+    _linesController.add(line.substring(colon));
+  }
+}
+
+/// A log reader that provides the most recent logs from `adb logcat`.
 class _AdbLogReader extends DeviceLogReader {
   _AdbLogReader(this.device) {
     _linesController = StreamController<String>.broadcast(
