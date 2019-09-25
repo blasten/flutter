@@ -65,7 +65,6 @@ const List<Feature> allFeatures = <Feature>[
   flutterLinuxDesktopFeature,
   flutterMacOSDesktopFeature,
   flutterWindowsDesktopFeature,
-  flutterBuildPluginAsAarFeature,
 ];
 
 /// The [Feature] for flutter web.
@@ -110,16 +109,6 @@ const Feature flutterWindowsDesktopFeature = Feature(
   name: 'Flutter for desktop on Windows',
   configSetting: 'enable-windows-desktop',
   environmentOverride: 'ENABLE_FLUTTER_DESKTOP',
-  master: FeatureChannelSetting(
-    available: true,
-    enabledByDefault: false,
-  ),
-);
-
-/// The [Feature] for building plugins as AARs in an app project.
-const Feature flutterBuildPluginAsAarFeature = Feature(
-  name: 'Build plugins independently as AARs in app projects',
-  configSetting: 'enable-build-plugin-as-aar',
   master: FeatureChannelSetting(
     available: true,
     enabledByDefault: false,
