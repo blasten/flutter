@@ -220,6 +220,13 @@ TaskFunction createFlutterGalleryCompileTest() {
   return CompileTest('${flutterDirectory.path}/dev/integration_tests/flutter_gallery').run;
 }
 
+TaskFunction createFlutterGalleryNonNullableCompileTest() {
+  // TODO(egarciad): change to sound null safety once all dependencies have been migrated.
+  // https://github.com/flutter/flutter/issues/66395
+  const NullSafetyMode mode = NullSafetyMode.unsound;
+  return CompileTest('${flutterDirectory.path}/dev/integration_tests/flutter_gallery', nullSafetyMode: mode).run;
+}
+
 TaskFunction createHelloWorldCompileTest() {
   return CompileTest('${flutterDirectory.path}/examples/hello_world', reportPackageContentSizes: true).run;
 }
@@ -860,13 +867,24 @@ class WebCompileTest {
   }
 }
 
+/// The level of Dart null safety while compiling the test app.
+enum NullSafetyMode {
+  sound,
+  unsound,
+  disabled,
+}
+
 /// Measures how long it takes to compile a Flutter app and how big the compiled
 /// code is.
 class CompileTest {
-  const CompileTest(this.testDirectory, { this.reportPackageContentSizes = false });
+  const CompileTest(this.testDirectory, {
+                    this.reportPackageContentSizes = false,
+                    this.nullSafetyMode = NullSafetyMode.disabled,
+                  });
 
   final String testDirectory;
   final bool reportPackageContentSizes;
+  final NullSafetyMode nullSafetyMode;
 
   Future<TaskResult> run() async {
     return await inDirectory<TaskResult>(testDirectory, () async {
@@ -875,7 +893,10 @@ class CompileTest {
       await flutter('packages', options: <String>['get']);
 
       final Map<String, dynamic> metrics = <String, dynamic>{
-        ...await _compileApp(reportPackageContentSizes: reportPackageContentSizes),
+        ...await _compileApp(
+          reportPackageContentSizes: reportPackageContentSizes,
+          nullSafetyMode: nullSafetyMode,
+        ),
         ...await _compileDebug(),
       };
 
@@ -883,12 +904,23 @@ class CompileTest {
     });
   }
 
-  static Future<Map<String, dynamic>> _compileApp({ bool reportPackageContentSizes = false }) async {
+  static Future<Map<String, dynamic>> _compileApp({
+    bool reportPackageContentSizes = false,
+    NullSafetyMode nullSafetyMode = NullSafetyMode.disabled,
+  }) async {
     await flutter('clean');
     final Stopwatch watch = Stopwatch();
     int releaseSizeInBytes;
     final List<String> options = <String>['--release'];
     final Map<String, dynamic> metrics = <String, dynamic>{};
+
+    if (nullSafetyMode == NullSafetyMode.unsound) {
+      options.add('--enable-experiment=non-nullable');
+      options.add('--no-sound-null-safety');
+    } else if (nullSafetyMode == NullSafetyMode.sound) {
+      options.add('--enable-experiment=non-nullable');
+      options.add('--sound-null-safety');
+    }
 
     switch (deviceOperatingSystem) {
       case DeviceOperatingSystem.ios:

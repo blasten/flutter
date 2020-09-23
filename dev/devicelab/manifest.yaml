@@ -92,6 +92,16 @@ tasks:
     stage: devicelab
     required_agent_capabilities: ["linux/android"]
 
+ flutter_gallery_android__nnbd_compile:
+    # TODO(egarciad): Remove flaky once the gallery, and its dependencies
+    # have been fully migrated to NNBD.
+    flaky: true
+    description: >
+      This test should turn green once the gallery and its
+      dependencies have been migrated to NNBD.
+    stage: devicelab
+    required_agent_capabilities: ["linux/android"]
+
   flutter_gallery_ios__compile:
     description: >
       Collects various performance metrics of compiling the Flutter
