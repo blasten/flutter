@@ -835,15 +835,11 @@ class PlatformViewLink extends StatefulWidget {
 class _PlatformViewLinkState extends State<PlatformViewLink> {
   int? _id;
   PlatformViewController? _controller;
-  bool _platformViewCreated = false;
   Widget? _surface;
   FocusNode? _focusNode;
 
   @override
   Widget build(BuildContext context) {
-    if (!_platformViewCreated) {
-      return const SizedBox.expand();
-    }
     _surface ??= widget._surfaceFactory(context, _controller!);
     return Focus(
       focusNode: _focusNode,
@@ -868,9 +864,6 @@ class _PlatformViewLinkState extends State<PlatformViewLink> {
       // The _surface has to be recreated as its controller is disposed.
       // Setting _surface to null will trigger its creation in build().
       _surface = null;
-
-      // We are about to create a new platform view.
-      _platformViewCreated = false;
       _initialize();
     }
   }
@@ -881,14 +874,10 @@ class _PlatformViewLinkState extends State<PlatformViewLink> {
       PlatformViewCreationParams._(
         id: _id!,
         viewType: widget.viewType,
-        onPlatformViewCreated: _onPlatformViewCreated,
+        onPlatformViewCreated: (_){ }, // TODO(egarciad): Deprecate onPlatformViewCreated.
         onFocusChanged: _handlePlatformFocusChanged,
       ),
     );
-  }
-
-  void _onPlatformViewCreated(int id) {
-    setState(() { _platformViewCreated = true; });
   }
 
   void _handleFrameworkFocusChanged(bool isFocused) {
